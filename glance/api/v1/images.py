@@ -19,6 +19,9 @@
 
 import copy
 
+
+import os
+
 import eventlet
 import glance_store as store
 import glance_store.location
@@ -56,13 +59,29 @@ _LW = gettextutils._LW
 SUPPORTED_PARAMS = glance.api.v1.SUPPORTED_PARAMS
 SUPPORTED_FILTERS = glance.api.v1.SUPPORTED_FILTERS
 ACTIVE_IMMUTABLE = glance.api.v1.ACTIVE_IMMUTABLE
+convert_change_opts = [
+    cfg.BoolOpt('format_change',
+                default=False,
+                help=_("The format to which images will be automatically "
+                      "It's true"))
+]
+convert_format_opts = [
+    cfg.StrOpt('convert_format',
+                default=None,
+                choices=('raw', 'qcow2'),
+                 help=_("The format to which images will be automatically "
+                      "converted. " "Can be 'qcow2' or 'raw'.")),
+]
+
+
 
 CONF = cfg.CONF
 CONF.import_opt('disk_formats', 'glance.common.config', group='image_format')
 CONF.import_opt('container_formats', 'glance.common.config',
                 group='image_format')
 CONF.import_opt('image_property_quota', 'glance.common.config')
-
+CONF.register_opts(convert_change_opts)
+CONF.register_opts(convert_format_opts)
 
 def validate_image_meta(req, values):
 
@@ -512,6 +531,9 @@ class Controller(controller.BaseController):
         """
         location = self._external_source(image_meta, req)
         scheme = image_meta.get('store')
+        if CONF.format_change:
+            cformat = CONF.convert_format
+            image_meta['disk_format'] = cformat
         if scheme and scheme not in store.get_known_schemes():
             msg = "Required store %s is invalid" % scheme
             LOG.debug(msg)
@@ -628,7 +650,13 @@ class Controller(controller.BaseController):
             req, image_meta, image_data, store, self.notifier)
 
         self.notifier.info('image.upload', redact_loc(image_meta))
-
+#   
+        if CONF.format_change:
+            conversion_format = CONF.convert_format
+            location_url = location_data['url']
+            file_path = location_url.split('://')[-1]
+            dest_path = location_url.split('://')[-1]
+            os.system('qemu-img' + " " + 'convert' + " " + '-O' + " " + conversion_format + " " + file_path + " " + dest_path) 
         return location_data
 
     def _activate(self, req, image_id, location_data, from_state=None):
@@ -838,7 +866,6 @@ class Controller(controller.BaseController):
                                              req)
 
         self._enforce_image_property_quota(image_meta, req=req)
-
         image_meta = self._reserve(req, image_meta)
         id = image_meta['id']
 
@@ -847,7 +874,7 @@ class Controller(controller.BaseController):
         location_uri = image_meta.get('location')
         if location_uri:
             self.update_store_acls(req, id, location_uri, public=is_public)
-
+     
         # Prevent client from learning the location, as it
         # could contain security credentials
         image_meta = redact_loc(image_meta)
